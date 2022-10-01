@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package svc;
+
+import "google/protobuf/empty.proto";
+
+option go_package = "/pb";
+
+service Service {
+  rpc Add(Req) returns (google.protobuf.Empty);
+}
+
+message Req {
+  string name = 1;
+  repeated string routers = 2;
+  string host = 3;
+  string path = 4;
+}
