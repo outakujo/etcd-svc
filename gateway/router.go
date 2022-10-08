@@ -1,9 +1,15 @@
 package gateway
 
 import (
+	"context"
+	"encoding/json"
 	"etcd-svc/etcd"
+	"fmt"
+	"go.etcd.io/etcd/api/v3/mvccpb"
+	clientv3 "go.etcd.io/etcd/client/v3"
 	"net/http"
-	"sync"
+	"strings"
+	"time"
 )
 
 type Svc struct {
@@ -13,49 +19,120 @@ type Svc struct {
 	Path    string
 }
 
-type router map[string]Svc
+type router map[string]string
 
 var Router = make(router)
 
-var mut sync.Mutex
+var client *clientv3.Client
 
-var uriSvc = make(map[string]string)
-
-func (r router) Add(svc Svc) {
-	mut.Lock()
-	defer mut.Unlock()
-	_, ok := r[svc.Name]
-	if ok {
-		return
+func InitClient(endpoints []string) error {
+	if client != nil {
+		return nil
 	}
+	cli, err := clientv3.New(clientv3.Config{
+		Endpoints:   endpoints,
+		DialTimeout: 5 * time.Second,
+	})
+	client = cli
+	return err
+}
+
+func (r router) Add(svc Svc) error {
+	grant, err := client.Grant(context.TODO(), 5)
+	if err != nil {
+		return err
+	}
+	key := "router/" + svc.Name
+	apis := make([]string, 0)
 	for _, s := range svc.Routers {
-		key := svc.Host + s
+		api := svc.Host + s
 		if svc.Path != "" {
-			key = svc.Host + "/" + svc.Path + s
+			api = svc.Host + "/" + svc.Path + s
 		}
-		uriSvc[key] = svc.Name
+		apis = append(apis, api)
 	}
-	r[svc.Name] = svc
+	marshal, err := json.Marshal(apis)
+	if err != nil {
+		return err
+	}
+	_, err = client.Put(context.TODO(), key, string(marshal), clientv3.WithLease(grant.ID))
+	alive, err := client.KeepAlive(context.TODO(), grant.ID)
+	if err != nil {
+		return err
+	}
+	go func() {
+		for range alive {
+		}
+	}()
+	return err
 }
 
-func (r router) Del(svc string) {
-	mut.Lock()
-	defer mut.Unlock()
-	_, ok := r[svc]
-	if !ok {
-		return
-	}
-	delete(r, svc)
-	for k, s := range uriSvc {
-		if s == svc {
-			delete(uriSvc, k)
-		}
-	}
+func (r router) Del(svc string) error {
+	key := "router/" + svc
+	_, err := client.Delete(context.TODO(), key)
+	return err
 }
 
-func Match(req *http.Request) string {
+func (r router) Match(req *http.Request) string {
 	host := req.Host
 	ur := req.URL
 	uri := host + ur.Path + "-" + req.Method
-	return etcd.RegisterSvcs.Get(uriSvc[uri])
+	svc := r[uri]
+	return etcd.RegisterSvcs.Get(svc)
+}
+
+func RefreshRouter() error {
+	key := "router/"
+	response, err := client.Get(context.TODO(), key, clientv3.WithPrefix())
+	if err != nil {
+		return err
+	}
+	for _, kv := range response.Kvs {
+		key := string(kv.Key)
+		split := strings.Split(key, "/")
+		svc := split[1]
+		value := kv.Value
+		apis := make([]string, 0)
+		err := json.Unmarshal(value, &apis)
+		if err != nil {
+			return err
+		}
+		for _, a := range apis {
+			Router[a] = svc
+		}
+	}
+	watch := client.Watch(context.TODO(), key, clientv3.WithPrefix())
+	go func() {
+		for resp := range watch {
+			for _, ev := range resp.Events {
+				key := string(ev.Kv.Key)
+				split := strings.Split(key, "/")
+				svc := split[1]
+				switch ev.Type {
+				case mvccpb.PUT:
+					value := ev.Kv.Value
+					apis := make([]string, 0)
+					err := json.Unmarshal(value, &apis)
+					if err != nil {
+						fmt.Println(err)
+						continue
+					}
+					for _, a := range apis {
+						Router[a] = svc
+					}
+				case mvccpb.DELETE:
+					get := etcd.RegisterSvcs.Get(svc)
+					if get != "" {
+						continue
+					}
+					for k, v := range Router {
+						if v == svc {
+							delete(Router, k)
+						}
+					}
+				}
+			}
+		}
+	}()
+	return nil
 }

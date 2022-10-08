@@ -22,11 +22,10 @@ func main() {
 	req := &pb.Req{
 		Name: *sv,
 		Routers: []string{
-			"/user-GET",
-			"/good-GET",
+			"/-GET",
 		},
 		Host: "localhost:9001",
-		Path: "",
+		Path: *sv,
 	}
 	gateway := etcd.RegisterSvcs.Get("gateway")
 	con, err := grpc.Dial(gateway, grpc.WithTransportCredentials(insecure.

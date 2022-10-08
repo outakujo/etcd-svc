@@ -9,8 +9,8 @@ import (
 
 func Run(port int) error {
 	engine := gin.New()
-	engine.Any("/*any", func(c *gin.Context) {
-		match := Match(c.Request)
+	engine.Use(func(c *gin.Context) {
+		match := Router.Match(c.Request)
 		fmt.Println(Router)
 		c.JSON(http.StatusOK, match)
 	})

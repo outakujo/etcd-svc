@@ -20,7 +20,7 @@ func Register(endpoints []string, svc, addr string) error {
 	if err != nil {
 		return err
 	}
-	locker, err := NewLocker(endpoints)
+	locker, err := NewLocker(endpoints, "register")
 	if err != nil {
 		return err
 	}
@@ -65,7 +65,7 @@ func Register(endpoints []string, svc, addr string) error {
 	return nil
 }
 
-func NewLocker(endpoints []string) (sync.Locker, error) {
+func NewLocker(endpoints []string, prefix string) (sync.Locker, error) {
 	cli, err := clientv3.New(clientv3.Config{
 		Endpoints:   endpoints,
 		DialTimeout: 5 * time.Second,
@@ -74,7 +74,7 @@ func NewLocker(endpoints []string) (sync.Locker, error) {
 	if err != nil {
 		return nil, err
 	}
-	return concurrency.NewLocker(session, "lock"), nil
+	return concurrency.NewLocker(session, prefix), nil
 }
 
 type registerSvcs map[string][]string
@@ -143,7 +143,7 @@ func refreshRegister(endpoints []string, svc string) error {
 		}
 		RegisterSvcs.Put(key, string(kv.Value))
 	}
-	watch := cli.Watch(context.TODO(), "svc/", clientv3.WithPrefix())
+	watch := cli.Watch(context.TODO(), "svc/", clientv3.WithPrefix(), clientv3.WithPrevKV())
 	go func() {
 		for resp := range watch {
 			for _, ev := range resp.Events {
@@ -156,7 +156,7 @@ func refreshRegister(endpoints []string, svc string) error {
 				case mvccpb.PUT:
 					RegisterSvcs.Put(key, string(ev.Kv.Value))
 				case mvccpb.DELETE:
-					RegisterSvcs.Del(key, string(ev.Kv.Value))
+					RegisterSvcs.Del(key, string(ev.PrevKv.Value))
 				}
 			}
 		}
