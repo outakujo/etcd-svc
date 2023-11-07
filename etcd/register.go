@@ -10,8 +10,8 @@ import (
 	"time"
 )
 
-const (
-	svcPrefix = "svc."
+var (
+	SvcPrefix = "svc."
 )
 
 func InitClient(endpoints []string) (cli *clientv3.Client, err error) {
@@ -26,14 +26,14 @@ func Register(cli *clientv3.Client, value string, keys ...string) error {
 	if len(keys) == 0 {
 		return errors.New("info not can be empty")
 	}
-	locker, err := NewLocker(cli, "register")
+	locker, err := NewLocker(cli, SvcPrefix+"register")
 	if err != nil {
 		return err
 	}
 	locker.Lock()
 	defer locker.Unlock()
 	join := strings.Join(keys, ".")
-	key := svcPrefix + join
+	key := SvcPrefix + join
 	response, err := cli.Get(context.Background(), key)
 	if err != nil {
 		return err
@@ -70,7 +70,7 @@ func NewLocker(cli *clientv3.Client, prefix string) (sync.Locker, error) {
 
 func DeRegister(cli *clientv3.Client, keys ...string) error {
 	join := strings.Join(keys, ".")
-	key := svcPrefix + join
+	key := SvcPrefix + join
 	response, err := cli.Delete(context.Background(), key, clientv3.WithPrefix())
 	if err != nil {
 		return err
@@ -82,7 +82,7 @@ func DeRegister(cli *clientv3.Client, keys ...string) error {
 }
 
 func SvcList(cli *clientv3.Client, name string) (rs [][]string, err error) {
-	response, err := cli.Get(context.TODO(), svcPrefix+name+".", clientv3.WithPrefix())
+	response, err := cli.Get(context.TODO(), SvcPrefix+name+".", clientv3.WithPrefix())
 	if err != nil {
 		return
 	}

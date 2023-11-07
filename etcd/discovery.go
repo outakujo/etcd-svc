@@ -15,8 +15,12 @@ func LoadBalance(redisCli *redis.Client, cli *clientv3.Client, name, filter stri
 	if err != nil {
 		return
 	}
-	watch := cli.Watch(context.Background(), svcPrefix+name+".",
+	watch := cli.Watch(context.Background(), SvcPrefix+name+".",
 		clientv3.WithPrefix(), clientv3.WithPrevKV())
+	locker, err := NewLocker(cli, SvcPrefix+"loadBalance")
+	if err != nil {
+		return
+	}
 	go func() {
 		for resp := range watch {
 			for _, ev := range resp.Events {
@@ -25,20 +29,29 @@ func LoadBalance(redisCli *redis.Client, cli *clientv3.Client, name, filter stri
 				case mvccpb.PUT:
 					value := string(ev.Kv.Value)
 					split := strings.Split(key, ".")
-					err := ban.Add(wrr.Server{
-						Addr:   value,
-						Name:   split[2],
-						Weight: 1,
-					})
-					if err != nil {
-						fmt.Printf("put key %v %v\n", key, err)
-					}
+					func() {
+						locker.Lock()
+						defer locker.Unlock()
+						err := ban.Add(wrr.Server{
+							Addr:   value,
+							Name:   split[2],
+							Weight: 1,
+						})
+						if err != nil {
+							fmt.Printf("put key %v %v\n", key, err)
+						}
+					}()
 				case mvccpb.DELETE:
 					split := strings.Split(key, ".")
-					err := ban.Remove(split[2])
-					if err != nil {
-						fmt.Printf("del key %v %v\n", key, err)
-					}
+					func() {
+						locker.Lock()
+						defer locker.Unlock()
+						err := ban.Remove(split[2])
+						if err != nil {
+							fmt.Printf("del key %v %v\n", key, err)
+						}
+					}()
+
 				}
 			}
 		}
